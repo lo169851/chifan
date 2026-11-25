@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>吃饭账本</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#0e1116">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header id="topbar">
+  <div class="brand">吃饭账本</div>
+  <button id="btnSettings" class="icon-btn" aria-label="设置">
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+      <circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/>
+    </svg>
+  </button>
+</header>
+
+<main>
+  <section id="view-home" class="view active">
+    <div class="seg" id="peopleSeg">
+      <button class="seg-btn on" data-who="me" id="segMe">我</button>
+      <button class="seg-btn" data-who="partner" id="segPartner">TA</button>
+    </div>
+    <div class="card today-card">
+      <div class="today-row">
+        <div>
+          <div class="label">今天吃了</div>
+          <div class="big-num"><span id="todayKcal">0</span><small>千卡</small></div>
+        </div>
+        <div class="ring-wrap">
+          <svg viewBox="0 0 100 100" class="ring">
+            <circle cx="50" cy="50" r="42" class="ring-bg"/>
+            <circle cx="50" cy="50" r="42" class="ring-fg" id="ringFg"/>
+          </svg>
+          <div class="ring-label" id="ringLabel">0%</div>
+        </div>
+      </div>
+      <div class="goal-line">
+        <span>目标 <span id="goalKcal">1800</span> 千卡 ·</span>
+        <span id="leftWrap">还剩 <b id="leftKcal">1800</b> 千卡</span>
+      </div>
+      <div class="tdee-line" id="tdeeLine"></div>
+    </div>
+
+    <div class="shoot-area" id="shootArea">
+      <button id="btnShoot" class="shoot-btn">
+        <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 8.5A2.5 2.5 0 0 1 5.5 6h1.7l1-1.6A2 2 0 0 1 9.9 3.5h4.2a2 2 0 0 1 1.7.9l1 1.6h1.7A2.5 2.5 0 0 1 21 8.5v8A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z"/>
+          <circle cx="12" cy="12.4" r="3.6"/>
+        </svg>
+        <span>拍一张，算热量</span>
+        <em>也可以点这里从相册选</em>
+      </button>
+      <input type="file" id="fileInput" accept="image/*" capture="environment" hidden>
+    </div>
+
+    <div class="partner-note" id="partnerNote" style="display:none">
+      这是 <b id="pnName">TA</b> 今天的记录 · 你自己拍的记在「<span id="pnMe">我</span>」那边
+    </div>
+
+    <div id="recentWrap">
+      <div class="sec-head"><span>今天吃过</span><button id="gotoHistory" class="link-btn">全部</button></div>
+      <div id="recentList" class="list"></div>
+    </div>
+  </section>
+
+  <section id="view-result" class="view">
+    <div id="resultHead" class="card result-head">
+      <img id="resultThumb" alt="">
+      <div class="result-sum">
+        <div class="label" id="resultMeal">识别结果</div>
+        <div class="big-num"><span id="resultKcal">0</span><small>千卡</small></div>
+        <div class="macros" id="resultMacros"></div>
+      </div>
+    </div>
+
+    <div class="hint-bar" id="portionHint">份量不对？点每道菜下面的按钮调</div>
+    <div id="itemsList" class="list"></div>
+
+    <div class="result-actions">
+      <button id="btnReshoot" class="ghost-btn">重拍</button>
+      <button id="btnSave" class="primary-btn">记下来</button>
+    </div>
+  </section>
+
+  <section id="view-history" class="view">
+    <div id="historyList" class="list"></div>
+  </section>
+</main>
+
+<nav id="tabbar">
+  <button class="tab active" data-view="home">
+    <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/></svg>
+    <span>记录</span>
+  </button>
+  <button class="tab" data-view="history">
+    <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>
+    <span>历史</span>
+  </button>
+</nav>
+
+<div id="sheetMask" class="mask"></div>
+<div id="sheet" class="sheet">
+  <div class="sheet-grab"></div>
+  <h2>设置</h2>
+
+  <label class="field">
+    <span>服务商</span>
+    <select id="setPreset"></select>
+  </label>
+
+  <label class="field">
+    <span>API 地址</span>
+    <input id="setUrl" type="url" placeholder="https://.../chat/completions" autocomplete="off" spellcheck="false">
+  </label>
+
+  <label class="field">
+    <span>模型名</span>
+    <input id="setModel" type="text" placeholder="deepseek-flash" autocomplete="off" spellcheck="false">
+  </label>
+
+  <label class="field">
+    <span>API Key</span>
+    <input id="setKey" type="password" placeholder="粘贴你的 Key" autocomplete="off" spellcheck="false">
+  </label>
+
+  <div class="field-row">
+    <label class="field">
+      <span>我的名字</span>
+      <input id="setMeName" type="text" placeholder="我" maxlength="8" autocomplete="off">
+    </label>
+    <label class="field">
+      <span>TA 的名字</span>
+      <input id="setPartnerName" type="text" placeholder="TA" maxlength="8" autocomplete="off">
+    </label>
+  </div>
+
+  <div class="group">
+    <div class="group-head">
+      <span>身材与每日目标</span>
+      <div class="mini-seg" id="profSeg">
+        <button type="button" data-p="me" class="on">我</button>
+        <button type="button" data-p="partner">TA</button>
+      </div>
+    </div>
+
+    <div class="field-row">
+      <label class="field">
+        <span>性别</span>
+        <select id="pSex"><option value="male">男</option><option value="female">女</option></select>
+      </label>
+      <label class="field">
+        <span>年龄</span>
+        <input id="pAge" type="number" inputmode="numeric" min="10" max="100" placeholder="22">
+      </label>
+    </div>
+
+    <div class="field-row">
+      <label class="field">
+        <span>身高（cm）</span>
+        <input id="pHeight" type="number" inputmode="decimal" min="100" max="230" placeholder="175">
+      </label>
+      <label class="field">
+        <span>体重（kg）</span>
+        <input id="pWeight" type="number" inputmode="decimal" min="30" max="200" placeholder="65">
+      </label>
+    </div>
+
+    <label class="field">
+      <span>活动量</span>
+      <select id="pActivity">
+        <option value="1.2">几乎不动（久坐）</option>
+        <option value="1.375">轻度活动（每周 1–3 次）</option>
+        <option value="1.55">中度活动（每周 3–5 次）</option>
+        <option value="1.725">高强度（每周 6–7 次）</option>
+      </select>
+    </label>
+
+    <label class="field">
+      <span>目标</span>
+      <select id="pMode">
+        <option value="lose">减脂（−20%）</option>
+        <option value="keep">维持体重</option>
+        <option value="gain">增肌（+10%）</option>
+      </select>
+    </label>
+
+    <div class="calc-box" id="calcBox">填身高体重，自动算</div>
+
+    <label class="field">
+      <span>每日目标（千卡，可手动微调）</span>
+      <input id="setGoal" type="number" inputmode="numeric" min="800" max="6000" step="10">
+    </label>
+  </div>
+
+  <div class="group">
+    <div class="group-head">
+      <span>云同步</span>
+      <span class="dim2" id="ghState">只存本机</span>
+    </div>
+    <label class="field">
+      <span>GitHub Token（只给数据仓库用）</span>
+      <input id="setGhToken" type="password" placeholder="github_pat_..." autocomplete="off" spellcheck="false">
+    </label>
+    <label class="check-row">
+      <input type="checkbox" id="setGhClear">
+      <span>清除已保存的 Token，退回只存本机</span>
+    </label>
+    <div class="tip-box">
+      填了 Token，你俩就共享同一份记录。做法：GitHub → Settings → Developer settings →
+      Personal access tokens → <b>Fine-grained tokens</b> → 生成时只选 <b>foodcal-data</b> 这一个仓库，
+      权限只勾 <b>Contents: Read and write</b>。两台手机填同一个 Token。
+    </div>
+  </div>
+
+  <div class="tip-box" id="keyTip">
+    识别用的是 DeepSeek，Key 存在这台手机本地，不会上传。换手机要重新填一次。
+  </div>
+
+  <div class="sheet-actions">
+    <button id="btnCancelSet" class="ghost-btn">取消</button>
+    <button id="btnSaveSet" class="primary-btn">保存</button>
+  </div>
+  <div class="version">v2.0 · 云端版</div>
+</div>
+
+<div id="toast" class="toast"></div>
+<div id="busy" class="busy">
+  <div class="spinner"></div>
+  <div id="busyText">正在认菜…</div>
+  <div class="busy-sub">大约 5–15 秒</div>
+</div>
+
+<script src="js/match.js"></script>
+<script src="js/nutrition.js"></script>
+<script src="js/backend.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
