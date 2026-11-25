@@ -1,0 +1,323 @@
+/* 纯前端后端：本地配置 + 浏览器直连模型 + GitHub 仓库当共享存储 */
+(function (global) {
+  'use strict';
+  const FB = global.FB = global.FB || {};
+
+  const DATA_REPO = 'lo169851/foodcal-data';
+  const DATA_FILE = 'records.json';
+  const DATA_BRANCH = 'main';
+  const MAX_ENTRIES = 240;
+
+  const PRESETS = {
+    deepseek: { label: 'DeepSeek（可读图）', url: 'https://api.deepseek.com/v1/chat/completions', model: 'deepseek-flash' },
+    zhipu: { label: '智谱 GLM-4V-Flash（免费）', url: 'https://open.bigmodel.cn/api/paas/v4/chat/completions', model: 'glm-4v-flash' },
+    dashscope: { label: '通义千问 qwen-vl-plus', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model: 'qwen-vl-plus' },
+    openai: { label: 'OpenAI gpt-4o-mini', url: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o-mini' },
+    custom: { label: '自定义（OpenAI 兼容）', url: '', model: '' }
+  };
+
+  const DEFAULT_PROFILE = { sex: 'male', age: 22, height: 175, weight: 65, activity: 1.375, mode: 'keep' };
+  const K_CFG = 'fc_cfg_v1', K_TOKEN = 'fc_gh_v1', K_REC = 'fc_rec_v1';
+
+  function readLS(k, fb) {
+    try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fb; } catch { return fb; }
+  }
+  function writeLS(k, v) {
+    try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { console.warn('本地存储写不进去', e); }
+  }
+
+  function getRawConfig() {
+    const c = readLS(K_CFG, {});
+    return {
+      preset: c.preset || 'deepseek',
+      url: c.url || PRESETS.deepseek.url,
+      model: c.model || PRESETS.deepseek.model,
+      apiKey: c.apiKey || '',
+      meName: c.meName || '我',
+      partnerName: c.partnerName || 'TA',
+      goals: c.goals || { me: 1800, partner: 1800 },
+      profiles: {
+        me: { ...DEFAULT_PROFILE, ...(c.profiles && c.profiles.me) },
+        partner: { ...DEFAULT_PROFILE, ...(c.profiles && c.profiles.partner) }
+      }
+    };
+  }
+  function saveRawConfig(c) { writeLS(K_CFG, c); }
+  function getToken() { return localStorage.getItem(K_TOKEN) || ''; }
+  function setToken(t) { if (t) localStorage.setItem(K_TOKEN, t); else localStorage.removeItem(K_TOKEN); }
+
+  function calcGoal(p) {
+    if (!p) return null;
+    const age = Number(p.age), h = Number(p.height), w = Number(p.weight);
+    if (!age || !h || !w) return null;
+    const bmr = 10 * w + 6.25 * h - 5 * age + (p.sex === 'female' ? -161 : 5);
+    const tdee = bmr * (Number(p.activity) || 1.375);
+    const f = p.mode === 'lose' ? 0.8 : p.mode === 'gain' ? 1.1 : 1;
+    return { bmr: Math.round(bmr), tdee: Math.round(tdee), goal: Math.round(tdee * f) };
+  }
+
+  function publicConfig() {
+    const c = getRawConfig();
+    return {
+      preset: c.preset, url: c.url, model: c.model, hasKey: !!c.apiKey,
+      dailyGoal: c.goals.me, goals: c.goals, profiles: c.profiles,
+      computed: { me: calcGoal(c.profiles.me), partner: calcGoal(c.profiles.partner) },
+      meName: c.meName, partnerName: c.partnerName,
+      hasCloud: !!getToken(), cloudRepo: DATA_REPO, presets: PRESETS
+    };
+  }
+
+  function ghHeaders(withJson) {
+    const h = { 'Authorization': 'Bearer ' + getToken(), 'Accept': 'application/vnd.github+json' };
+    if (withJson) h['Content-Type'] = 'application/json';
+    return h;
+  }
+  function b64encode(str) {
+    const bytes = new TextEncoder().encode(str);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
+  }
+  function b64decode(b64) {
+    const bin = atob(String(b64).replace(/\s/g, ''));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder().decode(bytes);
+  }
+  const dataUrl = () => `https://api.github.com/repos/${DATA_REPO}/contents/${DATA_FILE}`;
+
+  async function ghRead() {
+    const r = await fetch(dataUrl() + '?ref=' + DATA_BRANCH, { headers: ghHeaders(false), cache: 'no-store' });
+    if (r.status === 404) return { entries: [], sha: null };
+    if (r.status === 401 || r.status === 403) throw new Error('GitHub Token 无效或没权限（要 foodcal-data 的 Contents 读写）');
+    if (!r.ok) throw new Error('读取云端失败 ' + r.status);
+    const j = await r.json();
+    let data = { entries: [] };
+    try { data = JSON.parse(b64decode(j.content)); } catch { }
+    if (!Array.isArray(data.entries)) data.entries = [];
+    return { entries: data.entries, sha: j.sha };
+  }
+
+  async function ghWrite(entries, sha, message) {
+    const body = {
+      message: message || 'update records',
+      content: b64encode(JSON.stringify({ entries, updatedAt: Date.now() })),
+      branch: DATA_BRANCH
+    };
+    if (sha) body.sha = sha;
+    const r = await fetch(dataUrl(), { method: 'PUT', headers: ghHeaders(true), body: JSON.stringify(body) });
+    if (r.status === 409) return { conflict: true };
+    if (!r.ok) {
+      let m = r.status;
+      try { const j = await r.json(); m = j.message || m; } catch { }
+      throw new Error('写云端失败：' + m);
+    }
+    return { ok: true };
+  }
+
+  function dayKey(ts) {
+    const d = new Date(ts), p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }
+  function summarize(entries) {
+    const today = dayKey(Date.now());
+    const sums = { me: 0, partner: 0 };
+    for (const e of entries) {
+      if (dayKey(e.ts) !== today) continue;
+      sums[e.who === 'partner' ? 'partner' : 'me'] += e.totalKcal || 0;
+    }
+    return { today, todayByWho: sums, todayKcal: sums.me + sums.partner };
+  }
+
+  async function listEntries() {
+    let entries = readLS(K_REC, []);
+    let offline = false;
+    if (getToken()) {
+      try {
+        const r = await ghRead();
+        entries = r.entries;
+        writeLS(K_REC, entries);
+      } catch (e) { offline = e.message; }
+    }
+    entries.sort((a, b) => b.ts - a.ts);
+    const s = summarize(entries);
+    return { ok: true, entries: entries.slice(0, 200), ...s, offline };
+  }
+
+  async function addEntry(data) {
+    const entry = {
+      id: (crypto.randomUUID && crypto.randomUUID()) || String(Date.now() + Math.random()),
+      ts: Date.now(),
+      who: data.who === 'partner' ? 'partner' : 'me',
+      mealType: data.mealType || '',
+      items: Array.isArray(data.items) ? data.items.slice(0, 20) : [],
+      totalKcal: Math.round(Number(data.totalKcal) || 0),
+      totals: data.totals || null,
+      thumb: typeof data.thumb === 'string' && data.thumb.startsWith('data:image/') ? data.thumb : null,
+      note: data.note || ''
+    };
+    if (!getToken()) {
+      const local = readLS(K_REC, []);
+      local.unshift(entry);
+      writeLS(K_REC, local.slice(0, MAX_ENTRIES));
+      return { ok: true, entry, local: true };
+    }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const cur = await ghRead();
+      const merged = [entry, ...cur.entries].slice(0, MAX_ENTRIES);
+      const res = await ghWrite(merged, cur.sha, `记录一餐 ${entry.totalKcal}kcal`);
+      if (res.ok) { writeLS(K_REC, merged); return { ok: true, entry }; }
+    }
+    throw new Error('保存冲突了，再点一次就行');
+  }
+
+  async function removeEntry(id) {
+    if (!getToken()) {
+      const local = readLS(K_REC, []).filter(e => e.id !== id);
+      writeLS(K_REC, local);
+      return { ok: true, removed: 1 };
+    }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const cur = await ghRead();
+      const next = cur.entries.filter(e => e.id !== id);
+      const res = await ghWrite(next, cur.sha, '删除一餐');
+      if (res.ok) { writeLS(K_REC, next); return { ok: true, removed: cur.entries.length - next.length }; }
+    }
+    throw new Error('删除冲突了，再点一次');
+  }
+
+  const PROMPT = `你是中西餐营养分析助手。看这张照片，识别里面所有能吃能喝的东西，并估计各自重量。
+
+输出严格 JSON（不要 markdown 代码块，不要任何解释文字）：
+{"mealType":"早餐|午餐|晚餐|加餐","items":[{"name":"名称","grams":200,"confidence":0.8}],"note":"一句话依据"}
+
+规则：
+1. 逐个列出，不要合并成一盘。主食、菜、汤、饮品、小菜、酱料都单独算。
+2. 中餐西餐都要认：炒菜、面食、快餐汉堡披萨、意面、寿司、沙拉、烘焙甜点、水果零食都要能识别。
+3. 饮品也要单独列出（咖啡、奶茶、果汁、汽水、酒），液体的 grams 用毫升数代替。
+4. grams 用画面里的视觉参照估算：碗口直径约11cm、筷子约24cm、易拉罐高12cm、一次性纸杯约250ml、成人手掌宽8cm。米饭一平碗≈200g，一盘炒菜≈250g，一杯咖啡≈350ml，一瓶饮料≈500ml。
+5. 用中文通用名称，不要写品牌（"可乐"而不是"可口可乐"）。不要写"约"、"大概"。
+6. confidence 0-1，表示你对重量估计的信心。
+7. 看不清或不确定是不是食物的，不要瞎猜，宁可不列。`;
+
+  function parseModelJson(content) {
+    let s = String(content || '').trim();
+    s = s.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+    const a = s.indexOf('{'), b = s.lastIndexOf('}');
+    if (a >= 0 && b > a) s = s.slice(a, b + 1);
+    try { return JSON.parse(s); } catch {
+      try { return JSON.parse(s.replace(/,\s*([}\]])/g, '$1')); } catch { return null; }
+    }
+  }
+
+  async function analyze(imageDataUrl) {
+    const c = getRawConfig();
+    if (!c.apiKey) { const e = new Error('还没有填 API Key，点右上角齿轮填一下'); e.code = 'NOKEY'; throw e; }
+    const body = {
+      model: c.model,
+      messages: [
+        { role: 'system', content: PROMPT },
+        { role: 'user', content: [
+          { type: 'image_url', image_url: { url: imageDataUrl } },
+          { type: 'text', text: '请识别并输出 JSON。' }
+        ] }
+      ],
+      temperature: 0.1,
+      max_tokens: 900,
+      response_format: { type: 'json_object' }
+    };
+    let r;
+    try {
+      r = await fetch(c.url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + c.apiKey },
+        body: JSON.stringify(body)
+      });
+    } catch (err) {
+      throw new Error('连不上模型服务，检查手机网络');
+    }
+    const text = await r.text();
+    if (!r.ok) {
+      let msg = text.slice(0, 300);
+      try { const j = JSON.parse(text); msg = (j.error && (j.error.message || j.error.code)) || j.message || msg; } catch { }
+      if (r.status === 401 || r.status === 403) throw new Error('API Key 不对或已失效');
+      if (r.status === 429) throw new Error('调用太频繁或额度用完了');
+      throw new Error('模型返回 ' + r.status + '：' + msg);
+    }
+    let payload;
+    try { payload = JSON.parse(text); } catch { throw new Error('模型返回了无法解析的内容'); }
+    const raw = payload.choices && payload.choices[0] && payload.choices[0].message && payload.choices[0].message.content;
+    const content = Array.isArray(raw) ? raw.map(p => p.text || '').join('') : String(raw || '');
+    const parsed = parseModelJson(content);
+    if (!parsed || !Array.isArray(parsed.items)) throw new Error('模型没按格式回话，再拍一张试试');
+
+    await FB.loadFoods();
+    const items = parsed.items.slice(0, 15).map(it => {
+      const name = String(it.name || '').trim() || '未识别';
+      const grams = Math.max(1, Math.round(Number(it.grams) || 0)) || 100;
+      const nut = FB.enrich(name, grams, it.kcal);
+      return {
+        name, grams,
+        kcal: nut.kcal, protein: nut.protein, carbs: nut.carbs, fat: nut.fat,
+        matchedName: nut.matchedName, confidence: nut.confidence,
+        modelConfidence: Number(it.confidence) || null,
+        unit: nut.unit
+      };
+    });
+    return {
+      ok: true,
+      mealType: parsed.mealType || '',
+      note: parsed.note || '',
+      items,
+      totalKcal: items.reduce((s, i) => s + i.kcal, 0),
+      totals: {
+        protein: +items.reduce((s, i) => s + i.protein, 0).toFixed(1),
+        carbs: +items.reduce((s, i) => s + i.carbs, 0).toFixed(1),
+        fat: +items.reduce((s, i) => s + i.fat, 0).toFixed(1)
+      },
+      meta: { usage: payload.usage || null, model: c.model }
+    };
+  }
+
+  async function api(path, opts) {
+    const method = (opts && opts.method) || 'GET';
+    const body = opts && opts.body ? JSON.parse(opts.body) : null;
+    const u = new URL(path, 'http://x');
+    const p = u.pathname;
+
+    if (p === '/api/config') {
+      if (method === 'GET') return publicConfig();
+      const cur = getRawConfig();
+      const next = {
+        preset: body.preset != null ? body.preset : cur.preset,
+        url: body.url != null ? body.url : cur.url,
+        model: body.model != null ? body.model : cur.model,
+        apiKey: body.apiKey === '' ? '' : (body.apiKey != null ? body.apiKey : cur.apiKey),
+        meName: body.meName != null ? body.meName : cur.meName,
+        partnerName: body.partnerName != null ? body.partnerName : cur.partnerName,
+        goals: body.goals || cur.goals,
+        profiles: body.profiles || cur.profiles
+      };
+      saveRawConfig(next);
+      if (body.ghToken !== undefined) setToken(String(body.ghToken || '').trim());
+      return publicConfig();
+    }
+    if (p === '/api/analyze' && method === 'POST') return analyze(body.image);
+    if (p === '/api/history') {
+      if (method === 'GET') {
+        const q = u.searchParams.get('day');
+        const r = await listEntries();
+        if (q) r.entries = r.entries.filter(e => dayKey(e.ts) === q);
+        return r;
+      }
+      if (method === 'POST') return addEntry(body);
+      if (method === 'DELETE') return removeEntry(u.searchParams.get('id'));
+    }
+    throw new Error('未知接口 ' + p);
+  }
+
+  FB.api = api;
+  FB.calcGoal = calcGoal;
+  FB.getRawConfig = getRawConfig;
+  global.api = api;
+})(window);
