@@ -46,6 +46,67 @@
   function getToken() { return localStorage.getItem(K_TOKEN) || ''; }
   function setToken(t) { if (t) localStorage.setItem(K_TOKEN, t); else localStorage.removeItem(K_TOKEN); }
 
+  /* ---------------- 一键配置链接 ---------------- */
+  let justConfigured = false;
+
+  (function applySetupFromHash() {
+    const h = String(location.hash || '');
+    if (h.indexOf('#setup=') !== 0) return;
+    try {
+      const payload = JSON.parse(decodeURIComponent(h.slice(7)));
+      const c = getRawConfig();
+      if (payload.k) c.apiKey = String(payload.k);
+      if (payload.u) c.url = String(payload.u);
+      if (payload.m) c.model = String(payload.m);
+      if (payload.p && PRESETS[payload.p]) c.preset = String(payload.p);
+      saveRawConfig(c);
+      if (payload.t) setToken(String(payload.t));
+      justConfigured = true;
+    } catch (e) {
+      console.warn('一键配置链接解析失败', e);
+    }
+    try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { }
+  })();
+
+  function buildSetupLink() {
+    const c = getRawConfig();
+    const payload = { k: c.apiKey, t: getToken(), u: c.url, m: c.model, p: c.preset };
+    return location.origin + location.pathname + '#setup=' + encodeURIComponent(JSON.stringify(payload));
+  }
+
+  function mountShareUI() {
+    if (!document.body || document.getElementById('shareGroup')) return;
+    const sheet = document.getElementById('sheet');
+    if (!sheet) return;
+    const box = document.createElement('div');
+    box.className = 'group';
+    box.id = 'shareGroup';
+    box.innerHTML =
+      '<div class="group-head"><span>给对方一键配置</span></div>' +
+      '<div class="tip-box" style="margin-top:0">点下面的按钮生成一条链接，发给对方。' +
+      '对方点开就自动填好 Key 和 Token，什么都不用输。' +
+      '<br><br><b style="color:var(--warn)">链接里带着你的密钥，别发群里；对方打开后把那条消息删掉。</b></div>' +
+      '<button type="button" class="ghost-btn" id="btnShare" style="width:100%;margin-bottom:12px">生成并复制链接</button>' +
+      '<input id="shareOut" type="text" readonly style="display:none;width:100%;padding:12px 14px;' +
+      'border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--dim);font-size:12px">';
+    const actions = sheet.querySelector('.sheet-actions');
+    if (actions) sheet.insertBefore(box, actions); else sheet.appendChild(box);
+
+    box.querySelector('#btnShare').addEventListener('click', async function () {
+      const out = box.querySelector('#shareOut');
+      const c = getRawConfig();
+      if (!c.apiKey) { alert('先填好 API Key 再生成链接'); return; }
+      const link = buildSetupLink();
+      out.style.display = 'block';
+      out.value = link;
+      out.focus(); out.select();
+      let copied = false;
+      try { await navigator.clipboard.writeText(link); copied = true; } catch (e) { }
+      if (!copied) { try { document.execCommand('copy'); copied = true; } catch (e) { } }
+      box.querySelector('#btnShare').textContent = copied ? '已复制，去粘贴给对方' : '已生成，长按上面那栏复制';
+    });
+  }
+
   function calcGoal(p) {
     if (!p) return null;
     const age = Number(p.age), h = Number(p.height), w = Number(p.weight);
@@ -67,6 +128,7 @@
     };
   }
 
+  /* ---------------- GitHub ---------------- */
   function ghHeaders(withJson) {
     const h = { 'Authorization': 'Bearer ' + getToken(), 'Accept': 'application/vnd.github+json' };
     if (withJson) h['Content-Type'] = 'application/json';
@@ -84,7 +146,7 @@
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     return new TextDecoder().decode(bytes);
   }
-  const dataUrl = () => `https://api.github.com/repos/${DATA_REPO}/contents/${DATA_FILE}`;
+  const dataUrl = () => 'https://api.github.com/repos/' + DATA_REPO + '/contents/' + DATA_FILE;
 
   async function ghRead() {
     const r = await fetch(dataUrl() + '?ref=' + DATA_BRANCH, { headers: ghHeaders(false), cache: 'no-store' });
@@ -93,7 +155,7 @@
     if (!r.ok) throw new Error('读取云端失败 ' + r.status);
     const j = await r.json();
     let data = { entries: [] };
-    try { data = JSON.parse(b64decode(j.content)); } catch { }
+    try { data = JSON.parse(b64decode(j.content)); } catch (e) { }
     if (!Array.isArray(data.entries)) data.entries = [];
     return { entries: data.entries, sha: j.sha };
   }
@@ -101,7 +163,7 @@
   async function ghWrite(entries, sha, message) {
     const body = {
       message: message || 'update records',
-      content: b64encode(JSON.stringify({ entries, updatedAt: Date.now() })),
+      content: b64encode(JSON.stringify({ entries: entries, updatedAt: Date.now() })),
       branch: DATA_BRANCH
     };
     if (sha) body.sha = sha;
@@ -109,7 +171,7 @@
     if (r.status === 409) return { conflict: true };
     if (!r.ok) {
       let m = r.status;
-      try { const j = await r.json(); m = j.message || m; } catch { }
+      try { const j = await r.json(); m = j.message || m; } catch (e) { }
       throw new Error('写云端失败：' + m);
     }
     return { ok: true };
@@ -117,7 +179,7 @@
 
   function dayKey(ts) {
     const d = new Date(ts), p = n => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
   }
   function summarize(entries) {
     const today = dayKey(Date.now());
@@ -126,7 +188,7 @@
       if (dayKey(e.ts) !== today) continue;
       sums[e.who === 'partner' ? 'partner' : 'me'] += e.totalKcal || 0;
     }
-    return { today, todayByWho: sums, todayKcal: sums.me + sums.partner };
+    return { today: today, todayByWho: sums, todayKcal: sums.me + sums.partner };
   }
 
   async function listEntries() {
@@ -141,7 +203,7 @@
     }
     entries.sort((a, b) => b.ts - a.ts);
     const s = summarize(entries);
-    return { ok: true, entries: entries.slice(0, 200), ...s, offline };
+    return { ok: true, entries: entries.slice(0, 200), today: s.today, todayByWho: s.todayByWho, todayKcal: s.todayKcal, offline: offline };
   }
 
   async function addEntry(data) {
@@ -160,13 +222,13 @@
       const local = readLS(K_REC, []);
       local.unshift(entry);
       writeLS(K_REC, local.slice(0, MAX_ENTRIES));
-      return { ok: true, entry, local: true };
+      return { ok: true, entry: entry, local: true };
     }
     for (let attempt = 0; attempt < 2; attempt++) {
       const cur = await ghRead();
-      const merged = [entry, ...cur.entries].slice(0, MAX_ENTRIES);
-      const res = await ghWrite(merged, cur.sha, `记录一餐 ${entry.totalKcal}kcal`);
-      if (res.ok) { writeLS(K_REC, merged); return { ok: true, entry }; }
+      const merged = [entry].concat(cur.entries).slice(0, MAX_ENTRIES);
+      const res = await ghWrite(merged, cur.sha, '记录一餐 ' + entry.totalKcal + 'kcal');
+      if (res.ok) { writeLS(K_REC, merged); return { ok: true, entry: entry }; }
     }
     throw new Error('保存冲突了，再点一次就行');
   }
@@ -186,27 +248,26 @@
     throw new Error('删除冲突了，再点一次');
   }
 
-  const PROMPT = `你是中西餐营养分析助手。看这张照片，识别里面所有能吃能喝的东西，并估计各自重量。
-
-输出严格 JSON（不要 markdown 代码块，不要任何解释文字）：
-{"mealType":"早餐|午餐|晚餐|加餐","items":[{"name":"名称","grams":200,"confidence":0.8}],"note":"一句话依据"}
-
-规则：
-1. 逐个列出，不要合并成一盘。主食、菜、汤、饮品、小菜、酱料都单独算。
-2. 中餐西餐都要认：炒菜、面食、快餐汉堡披萨、意面、寿司、沙拉、烘焙甜点、水果零食都要能识别。
-3. 饮品也要单独列出（咖啡、奶茶、果汁、汽水、酒），液体的 grams 用毫升数代替。
-4. grams 用画面里的视觉参照估算：碗口直径约11cm、筷子约24cm、易拉罐高12cm、一次性纸杯约250ml、成人手掌宽8cm。米饭一平碗≈200g，一盘炒菜≈250g，一杯咖啡≈350ml，一瓶饮料≈500ml。
-5. 用中文通用名称，不要写品牌（"可乐"而不是"可口可乐"）。不要写"约"、"大概"。
-6. confidence 0-1，表示你对重量估计的信心。
-7. 看不清或不确定是不是食物的，不要瞎猜，宁可不列。`;
+  /* ---------------- 识别 ---------------- */
+  const PROMPT = '你是中西餐营养分析助手。看这张照片，识别里面所有能吃能喝的东西，并估计各自重量。\n\n' +
+    '输出严格 JSON（不要 markdown 代码块，不要任何解释文字）：\n' +
+    '{"mealType":"早餐|午餐|晚餐|加餐","items":[{"name":"名称","grams":200,"confidence":0.8}],"note":"一句话依据"}\n\n' +
+    '规则：\n' +
+    '1. 逐个列出，不要合并成一盘。主食、菜、汤、饮品、小菜、酱料都单独算。\n' +
+    '2. 中餐西餐都要认：炒菜、面食、快餐汉堡披萨、意面、寿司、沙拉、烘焙甜点、水果零食都要能识别。\n' +
+    '3. 饮品也要单独列出（咖啡、奶茶、果汁、汽水、酒），液体的 grams 用毫升数代替。\n' +
+    '4. grams 用画面里的视觉参照估算：碗口直径约11cm、筷子约24cm、易拉罐高12cm、一次性纸杯约250ml、成人手掌宽8cm。米饭一平碗≈200g，一盘炒菜≈250g，一杯咖啡≈350ml，一瓶饮料≈500ml。\n' +
+    '5. 用中文通用名称，不要写品牌（"可乐"而不是"可口可乐"）。不要写"约"、"大概"。\n' +
+    '6. confidence 0-1，表示你对重量估计的信心。\n' +
+    '7. 看不清或不确定是不是食物的，不要瞎猜，宁可不列。';
 
   function parseModelJson(content) {
     let s = String(content || '').trim();
     s = s.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
     const a = s.indexOf('{'), b = s.lastIndexOf('}');
     if (a >= 0 && b > a) s = s.slice(a, b + 1);
-    try { return JSON.parse(s); } catch {
-      try { return JSON.parse(s.replace(/,\s*([}\]])/g, '$1')); } catch { return null; }
+    try { return JSON.parse(s); } catch (e) {
+      try { return JSON.parse(s.replace(/,\s*([}\]])/g, '$1')); } catch (e2) { return null; }
     }
   }
 
@@ -239,13 +300,13 @@
     const text = await r.text();
     if (!r.ok) {
       let msg = text.slice(0, 300);
-      try { const j = JSON.parse(text); msg = (j.error && (j.error.message || j.error.code)) || j.message || msg; } catch { }
+      try { const j = JSON.parse(text); msg = (j.error && (j.error.message || j.error.code)) || j.message || msg; } catch (e) { }
       if (r.status === 401 || r.status === 403) throw new Error('API Key 不对或已失效');
       if (r.status === 429) throw new Error('调用太频繁或额度用完了');
       throw new Error('模型返回 ' + r.status + '：' + msg);
     }
     let payload;
-    try { payload = JSON.parse(text); } catch { throw new Error('模型返回了无法解析的内容'); }
+    try { payload = JSON.parse(text); } catch (e) { throw new Error('模型返回了无法解析的内容'); }
     const raw = payload.choices && payload.choices[0] && payload.choices[0].message && payload.choices[0].message.content;
     const content = Array.isArray(raw) ? raw.map(p => p.text || '').join('') : String(raw || '');
     const parsed = parseModelJson(content);
@@ -257,7 +318,7 @@
       const grams = Math.max(1, Math.round(Number(it.grams) || 0)) || 100;
       const nut = FB.enrich(name, grams, it.kcal);
       return {
-        name, grams,
+        name: name, grams: grams,
         kcal: nut.kcal, protein: nut.protein, carbs: nut.carbs, fat: nut.fat,
         matchedName: nut.matchedName, confidence: nut.confidence,
         modelConfidence: Number(it.confidence) || null,
@@ -268,7 +329,7 @@
       ok: true,
       mealType: parsed.mealType || '',
       note: parsed.note || '',
-      items,
+      items: items,
       totalKcal: items.reduce((s, i) => s + i.kcal, 0),
       totals: {
         protein: +items.reduce((s, i) => s + i.protein, 0).toFixed(1),
@@ -319,5 +380,18 @@
   FB.api = api;
   FB.calcGoal = calcGoal;
   FB.getRawConfig = getRawConfig;
+  FB.buildSetupLink = buildSetupLink;
   global.api = api;
+
+  document.addEventListener('DOMContentLoaded', function () {
+    mountShareUI();
+    if (justConfigured) {
+      const t = document.getElementById('toast');
+      if (t) {
+        t.textContent = '已自动配置好，直接用吧';
+        t.className = 'toast on';
+        setTimeout(function () { t.className = 'toast'; }, 3000);
+      }
+    }
+  });
 })(window);
