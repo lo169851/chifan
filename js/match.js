@@ -16,6 +16,7 @@
     const minL = Math.min(cand.length, q.length);
     const maxL = Math.max(cand.length, q.length);
     const ratio = minL / maxL;
+    // 中文菜名的中心词几乎总在末尾（"韭菜鸡蛋饺子"→饺子），后缀命中权重最高
     if (q.endsWith(cand)) return 84 + ratio * 12;
     if (cand.endsWith(q)) return 78 + ratio * 12;
     if (q.includes(cand) || cand.includes(q)) return 58 + ratio * 20;
@@ -33,10 +34,13 @@
     if (!q) return { food: null, score: 0 };
     let best = null, bestScore = 0;
     for (const f of foods || []) {
-      for (const c of [f.n, ...(f.a || [])]) {
-        const n = normalize(c);
+      const cands = [f.n].concat(f.a || []);
+      for (let i = 0; i < cands.length; i++) {
+        const n = normalize(cands[i]);
         if (!n) continue;
-        const s = score(n, q);
+        let s = score(n, q);
+        // 本名（i=0）永远比别名优先，避免"全脂牛奶"被当成"牛奶"的别名
+        if (s > 0 && i === 0) s += 0.5;
         if (s > bestScore) { bestScore = s; best = f; }
       }
     }
