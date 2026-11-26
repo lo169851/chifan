@@ -10,7 +10,8 @@
     'data/foods-b.json',
     'data/foods-c.json',
     'data/foods-d.json',
-    'data/foods-e.json'
+    'data/foods-e.json',
+    'data/foods-f.json'
   ];
 
   let FOODS = [];
