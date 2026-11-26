@@ -1,10 +1,10 @@
 /* 用本地热量库把「菜名 + 克数」折算成营养素（浏览器版）
-   热量库分成多个文件，这里负责合并、去重。 */
+   热量库分成多个文件，后加载的同名条目会覆盖前面的，方便单独写一片做修正。 */
 (function (global) {
   'use strict';
   const FB = global.FB = global.FB || {};
 
-  // 分片顺序无所谓，加载时按名字去重，先出现的优先
+  // 顺序即优先级：越靠后优先级越高（H 片是人工修正片）
   const PARTS = [
     'data/foods.json',
     'data/foods-b.json',
@@ -12,7 +12,8 @@
     'data/foods-d.json',
     'data/foods-e.json',
     'data/foods-f.json',
-    'data/foods-g.json'
+    'data/foods-g.json',
+    'data/foods-h.json'
   ];
 
   let FOODS = [];
@@ -48,19 +49,17 @@
         .then(r => (r.ok ? r.json() : { foods: [] }))
         .catch(() => ({ foods: [] }))
     ));
-    const seen = new Set();
-    const all = [];
+    const map = new Map();
     for (const pack of packs) {
       for (const raw of (pack.foods || [])) {
         const f = normOne(raw);
         if (!f || !f.n) continue;
         const key = f.n.trim();
-        if (!key || seen.has(key)) continue;
-        seen.add(key);
-        all.push(f);
+        if (!key) continue;
+        map.set(key, f);   // 覆盖：后面的分片优先
       }
     }
-    FOODS = all;
+    FOODS = Array.from(map.values());
     loaded = true;
     return FOODS;
   }
