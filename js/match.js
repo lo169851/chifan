@@ -13,6 +13,8 @@
 
   function score(cand, q) {
     if (cand === q) return 100;
+    // 单字查询只能精确命中，否则"水"会匹配到"糖水"
+    if (q.length <= 1) return 0;
     const minL = Math.min(cand.length, q.length);
     const maxL = Math.max(cand.length, q.length);
     const ratio = minL / maxL;
