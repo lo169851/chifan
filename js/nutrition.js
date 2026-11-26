@@ -11,7 +11,8 @@
     'data/foods-c.json',
     'data/foods-d.json',
     'data/foods-e.json',
-    'data/foods-f.json'
+    'data/foods-f.json',
+    'data/foods-g.json'
   ];
 
   let FOODS = [];
