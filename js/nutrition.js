@@ -19,9 +19,6 @@
   let FOODS = [];
   let loaded = false;
 
-  // 支持两种写法：
-  //   完整对象 { n, a, k, p, c, f, u }
-  //   紧凑数组 [ 名称, 千卡, 蛋白, 碳水, 脂肪, 份量 ]
   function normOne(x) {
     if (Array.isArray(x) && x.length >= 5) {
       return {
@@ -56,12 +53,26 @@
         if (!f || !f.n) continue;
         const key = f.n.trim();
         if (!key) continue;
-        map.set(key, f);   // 覆盖：后面的分片优先
+        map.set(key, f);
       }
     }
     FOODS = Array.from(map.values());
     loaded = true;
     return FOODS;
+  }
+
+  // 库里没有的东西怎么估：按名字猜类别，别再一律 1.5 千卡/克
+  function fallbackKcal(name, g, guess) {
+    if (Number(guess) > 0) return Math.round(Number(guess));
+    const s = String(name || '').trim();
+    // 纯水
+    if (/^(水|白水|瓶装水|矿泉水|纯净水|饮用水|凉白开|白开水|冰水|热水|温水|苏打水|气泡水)$/.test(s)) return 0;
+    // 其他饮品：按 25 千卡/100 估
+    if (/水|茶|咖啡|汽水|可乐|饮料|果汁|酒/.test(s)) return Math.round(g * 0.25);
+    // 汤羹粥：按 40 千卡/100 估
+    if (/汤|粥|羹/.test(s)) return Math.round(g * 0.4);
+    // 普通菜：按 150 千卡/100 估，但不超过 900 千卡/100g
+    return Math.round(Math.min(g * 1.5, g * 9));
   }
 
   function enrich(name, grams, modelGuessKcal) {
@@ -76,7 +87,7 @@
         matchedName: f.n, confidence: 'high', unit: f.u || null
       };
     }
-    const k = Number(modelGuessKcal) > 0 ? Number(modelGuessKcal) : g * 1.5;
+    const k = fallbackKcal(name, g, modelGuessKcal);
     return {
       kcal: Math.round(k),
       protein: +(g * 0.06).toFixed(1),
@@ -88,5 +99,6 @@
 
   FB.loadFoods = loadFoods;
   FB.enrich = enrich;
+  FB.fallbackKcal = fallbackKcal;
   FB.foodCount = () => FOODS.length;
 })(window);
