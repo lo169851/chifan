@@ -20,7 +20,7 @@
   const K_CFG = 'fc_cfg_v1', K_TOKEN = 'fc_gh_v1', K_REC = 'fc_rec_v1';
 
   function readLS(k, fb) {
-    try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fb; } catch { return fb; }
+    try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fb; } catch (e) { return fb; }
   }
   function writeLS(k, v) {
     try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { console.warn('本地存储写不进去', e); }
@@ -37,8 +37,8 @@
       partnerName: c.partnerName || 'TA',
       goals: c.goals || { me: 1800, partner: 1800 },
       profiles: {
-        me: { ...DEFAULT_PROFILE, ...(c.profiles && c.profiles.me) },
-        partner: { ...DEFAULT_PROFILE, ...(c.profiles && c.profiles.partner) }
+        me: Object.assign({}, DEFAULT_PROFILE, c.profiles && c.profiles.me),
+        partner: Object.assign({}, DEFAULT_PROFILE, c.profiles && c.profiles.partner)
       }
     };
   }
@@ -261,19 +261,41 @@
     '6. confidence 0-1，表示你对重量估计的信心。\n' +
     '7. 看不清或不确定是不是食物的，不要瞎猜，宁可不列。';
 
-  function parseModelJson(content) {
-    let s = String(content || '').trim();
-    s = s.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
-    const a = s.indexOf('{'), b = s.lastIndexOf('}');
-    if (a >= 0 && b > a) s = s.slice(a, b + 1);
-    try { return JSON.parse(s); } catch (e) {
-      try { return JSON.parse(s.replace(/,\s*([}\]])/g, '$1')); } catch (e2) { return null; }
+  // 从模型回复里尽量捞出物体数组：正规解析 → 修尾逗号 → 补全被截断的 JSON
+  function extractItems(text) {
+    const src = String(text || '');
+    let s = src.trim()
+      .replace(/^```(?:json)?/i, '')
+      .replace(/```$/, '')
+      .trim();
+    const a = s.indexOf('{');
+    if (a >= 0) s = s.slice(a);
+
+    // 1) 直接解析
+    const tryParse = (t) => { try { return JSON.parse(t); } catch (e) { return null; } };
+    let obj = tryParse(s);
+    if (!obj) obj = tryParse(s.replace(/,\s*([}\]])/g, '$1'));
+    if (obj && Array.isArray(obj.items)) return obj;
+
+    // 2) 被 max_tokens 截断：逐个捞完整的 {"name":...,"grams":...} 片段
+    const items = [];
+    const re = /\{[^{}]*?"name"\s*:\s*"([^"]+)"[^{}]*?"grams"\s*:\s*(\d+(?:\.\d+)?)[^{}]*?\}/g;
+    let m;
+    while ((m = re.exec(src)) !== null) {
+      items.push({ name: m[1], grams: Number(m[2]), confidence: null });
     }
+    if (items.length) {
+      const mt = src.match(/"mealType"\s*:\s*"([^"]+)"/);
+      const nt = src.match(/"note"\s*:\s*"([^"]*)"/);
+      return { mealType: mt ? mt[1] : '', note: nt ? nt[1] : '', items: items, salvaged: true };
+    }
+    return null;
   }
 
   async function analyze(imageDataUrl) {
     const c = getRawConfig();
     if (!c.apiKey) { const e = new Error('还没有填 API Key，点右上角齿轮填一下'); e.code = 'NOKEY'; throw e; }
+
     const body = {
       model: c.model,
       messages: [
@@ -284,9 +306,11 @@
         ] }
       ],
       temperature: 0.1,
-      max_tokens: 900,
+      // 思考过程也计入 max_tokens，给小了会把 JSON 截断，所以留足预算
+      max_tokens: 3000,
       response_format: { type: 'json_object' }
     };
+
     let r;
     try {
       r = await fetch(c.url, {
@@ -297,6 +321,7 @@
     } catch (err) {
       throw new Error('连不上模型服务，检查手机网络');
     }
+
     const text = await r.text();
     if (!r.ok) {
       let msg = text.slice(0, 300);
@@ -305,12 +330,23 @@
       if (r.status === 429) throw new Error('调用太频繁或额度用完了');
       throw new Error('模型返回 ' + r.status + '：' + msg);
     }
+
     let payload;
     try { payload = JSON.parse(text); } catch (e) { throw new Error('模型返回了无法解析的内容'); }
-    const raw = payload.choices && payload.choices[0] && payload.choices[0].message && payload.choices[0].message.content;
-    const content = Array.isArray(raw) ? raw.map(p => p.text || '').join('') : String(raw || '');
-    const parsed = parseModelJson(content);
-    if (!parsed || !Array.isArray(parsed.items)) throw new Error('模型没按格式回话，再拍一张试试');
+    const ch = (payload.choices && payload.choices[0]) || {};
+    const msgObj = ch.message || {};
+    const rawContent = msgObj.content;
+    const content = Array.isArray(rawContent) ? rawContent.map(p => p.text || '').join('') : String(rawContent || '');
+    const reasoning = String(msgObj.reasoning_content || '');
+
+    // 正常在 content 里；万一只有思考字段里有，也捞一下
+    let parsed = extractItems(content);
+    if (!parsed && reasoning) parsed = extractItems(reasoning);
+
+    if (!parsed || !Array.isArray(parsed.items) || !parsed.items.length) {
+      if (ch.finish_reason === 'length') throw new Error('这张照片菜太多了，一次算不完，分开拍两张试试');
+      throw new Error('没认出东西，换个角度或者凑近点再拍一张');
+    }
 
     await FB.loadFoods();
     const items = parsed.items.slice(0, 15).map(it => {
@@ -325,10 +361,11 @@
         unit: nut.unit
       };
     });
+
     return {
       ok: true,
       mealType: parsed.mealType || '',
-      note: parsed.note || '',
+      note: (parsed.note || '') + (parsed.salvaged ? '（这张菜太多，只认到一部分）' : ''),
       items: items,
       totalKcal: items.reduce((s, i) => s + i.kcal, 0),
       totals: {
@@ -336,7 +373,7 @@
         carbs: +items.reduce((s, i) => s + i.carbs, 0).toFixed(1),
         fat: +items.reduce((s, i) => s + i.fat, 0).toFixed(1)
       },
-      meta: { usage: payload.usage || null, model: c.model }
+      meta: { usage: payload.usage || null, model: c.model, finish: ch.finish_reason }
     };
   }
 
@@ -381,6 +418,7 @@
   FB.calcGoal = calcGoal;
   FB.getRawConfig = getRawConfig;
   FB.buildSetupLink = buildSetupLink;
+  FB.extractItems = extractItems;
   global.api = api;
 
   document.addEventListener('DOMContentLoaded', function () {
